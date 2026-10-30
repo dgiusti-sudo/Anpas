@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2f5d8a">
+  <meta name="description" content="Gestione della classe per il rappresentante: cassa, raccolte fondi, calendario e annunci.">
+  <title>Rappresentante di Classe</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1 id="classe-titolo">La mia classe</h1>
+      <p id="classe-sottotitolo" class="muted"></p>
+    </div>
+  </header>
+
+  <main id="view" tabindex="-1"></main>
+
+  <nav class="tabbar" aria-label="Sezioni">
+    <button data-tab="home" class="active"><span class="ico">🏠</span><span>Home</span></button>
+    <button data-tab="cassa"><span class="ico">💶</span><span>Cassa</span></button>
+    <button data-tab="raccolte"><span class="ico">🎯</span><span>Raccolte</span></button>
+    <button data-tab="calendario"><span class="ico">📅</span><span>Calendario</span></button>
+    <button data-tab="annunci"><span class="ico">📣</span><span>Annunci</span></button>
+    <button data-tab="classe"><span class="ico">👥</span><span>Classe</span></button>
+  </nav>
+
+  <dialog id="modal">
+    <form id="modal-form" method="dialog">
+      <h2 id="modal-titolo"></h2>
+      <div id="modal-corpo"></div>
+      <div class="modal-azioni">
+        <button type="button" class="btn ghost" id="modal-annulla">Annulla</button>
+        <button type="submit" class="btn primary" id="modal-ok">Salva</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

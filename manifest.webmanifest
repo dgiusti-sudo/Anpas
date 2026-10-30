@@ -1,0 +1,14 @@
+{
+  "name": "Rappresentante di Classe",
+  "short_name": "Classe",
+  "description": "Cassa, raccolte fondi, calendario e annunci della classe.",
+  "lang": "it",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6f9",
+  "theme_color": "#2f5d8a",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
