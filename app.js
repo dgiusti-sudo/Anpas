@@ -37,15 +37,81 @@ function carica() {
   }
 }
 
-let state = carica();
+let state = statoVuoto();
+
+/* ---------- Server (PHP/MySQL) ---------- */
+
+// modalita: 'locale' (solo localStorage) | 'server' | 'login' (server, utente non autenticato)
+const server = { modalita: 'locale', ruolo: 'admin', versione: 0, timer: null, inCorso: false, inSospeso: false };
+
+const admin = () => server.ruolo === 'admin';
+
+async function api(azione, corpo) {
+  const opzioni = corpo === undefined
+    ? { headers: { Accept: 'application/json' } }
+    : {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'classe-app' },
+      body: JSON.stringify(corpo),
+    };
+  const res = await fetch('api.php?azione=' + azione, { credentials: 'same-origin', cache: 'no-store', ...opzioni });
+  let dati;
+  try {
+    dati = await res.json();
+  } catch {
+    throw Object.assign(new Error('nessuna_api'), { status: res.status, nessunaApi: true });
+  }
+  if (!res.ok) throw Object.assign(new Error(dati.errore || 'errore'), { status: res.status, dati });
+  return dati;
+}
+
+async function caricaDalServer() {
+  const r = await api('stato');
+  server.modalita = 'server';
+  server.ruolo = r.ruolo;
+  server.versione = r.versione;
+  state = r.ruolo === 'admin' ? { ...statoVuoto(), ...r.dati } : r.dati;
+}
 
 function salva() {
+  if (server.modalita === 'locale') {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {
+      toast('Impossibile salvare i dati su questo dispositivo');
+    }
+    return;
+  }
+  if (!admin()) return;
+  clearTimeout(server.timer);
+  server.timer = setTimeout(inviaAlServer, 400);
+}
+
+async function inviaAlServer() {
+  if (server.inCorso) { server.inSospeso = true; return; }
+  server.inCorso = true;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    toast('Impossibile salvare i dati su questo dispositivo');
+    const r = await api('salva', { versione: server.versione, dati: state });
+    server.versione = r.versione;
+  } catch (e) {
+    if (e.status === 409) {
+      toast('Dati modificati da un altro dispositivo: ricaricati. Ripeti la tua ultima modifica.');
+      await caricaDalServer();
+      render();
+    } else if (e.status === 401) {
+      mostraLogin();
+    } else {
+      toast('⚠️ Salvataggio non riuscito: controlla la connessione');
+    }
+  } finally {
+    server.inCorso = false;
+    if (server.inSospeso) { server.inSospeso = false; inviaAlServer(); }
   }
 }
+
+window.addEventListener('beforeunload', (e) => {
+  if (server.timer && (server.inCorso || server.inSospeso)) e.preventDefault();
+});
 
 /* ---------- Utilità ---------- */
 
@@ -204,14 +270,88 @@ function vai(t) {
   window.scrollTo(0, 0);
 }
 
+function mostraLogin(messaggio = '') {
+  server.modalita = 'login';
+  state = statoVuoto();
+  render();
+  if (messaggio) document.getElementById('login-errore').textContent = messaggio;
+}
+
+function vistaLogin() {
+  return `<form class="card" id="login-form" style="max-width:420px;margin:24px auto">
+    <h2>Accedi</h2>
+    <p class="muted" style="margin:6px 0 14px">Inserisci la password del rappresentante oppure il codice di accesso per i genitori.</p>
+    <div class="field"><label for="login-pwd">Password o codice</label>
+      <input id="login-pwd" type="password" required autocomplete="current-password"></div>
+    <p id="login-errore" class="neg" style="min-height:1.4em;margin:0 0 8px"></p>
+    <button class="btn primary" type="submit" style="width:100%">Entra</button>
+  </form>`;
+}
+
+const ERRORI_LOGIN = {
+  password_errata: 'Password o codice non corretti.',
+  troppi_tentativi: 'Troppi tentativi falliti. Riprova tra 15 minuti.',
+};
+
+async function eseguiLogin(e) {
+  e.preventDefault();
+  const pwd = document.getElementById('login-pwd').value;
+  const err = document.getElementById('login-errore');
+  err.textContent = '';
+  try {
+    await api('login', { password: pwd });
+    await caricaDalServer();
+    tab = 'home';
+    await proponiMigrazione();
+    render();
+  } catch (ex) {
+    err.textContent = ERRORI_LOGIN[ex.message] || 'Errore di connessione, riprova.';
+  }
+}
+
+// Al primo accesso del rappresentante, propone di caricare online i dati usati finora sul dispositivo.
+async function proponiMigrazione() {
+  if (!admin()) return;
+  const vuoto = !state.alunni.length && !state.movimenti.length && !state.eventi.length && !state.annunci.length;
+  let locali;
+  try { locali = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch { return; }
+  if (!vuoto || !locali || !Array.isArray(locali.alunni)) return;
+  if (!conferma('Su questo dispositivo ci sono dati salvati in precedenza. Vuoi caricarli online?')) return;
+  state = { ...statoVuoto(), ...locali };
+  await inviaAlServer();
+  try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignora */ }
+  toast('Dati caricati online');
+}
+
+async function esci() {
+  try { await api('logout', {}); } catch { /* ignora */ }
+  mostraLogin();
+}
+
 function render() {
+  const inLogin = server.modalita === 'login';
+  document.body.classList.toggle('genitore', !admin());
+  document.querySelector('.tabbar').hidden = inLogin;
+  document.querySelector('.tabbar [data-tab=classe]').hidden = !admin();
+  document.getElementById('btn-esci').hidden = server.modalita !== 'server';
+
+  if (inLogin) {
+    document.getElementById('classe-titolo').textContent = 'Rappresentante di classe';
+    document.getElementById('classe-sottotitolo').textContent = '';
+    const view = document.getElementById('view');
+    view.innerHTML = vistaLogin();
+    document.getElementById('login-form').addEventListener('submit', eseguiLogin);
+    document.getElementById('login-pwd').focus();
+    return;
+  }
+
   const c = state.classe;
   document.getElementById('classe-titolo').textContent = c.nome ? `Classe ${c.nome}` : 'La mia classe';
   document.getElementById('classe-sottotitolo').textContent =
     [c.scuola, c.anno ? `A.S. ${c.anno}` : ''].filter(Boolean).join(' · ') || 'Rappresentante di classe';
 
   const view = document.getElementById('view');
-  view.innerHTML = VISTE[tab]();
+  view.innerHTML = (!admin() && VISTE_GENITORE[tab] ? VISTE_GENITORE : VISTE)[tab]();
   view.querySelectorAll('[data-act]').forEach((el) => {
     el.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -234,7 +374,7 @@ const VISTE = {
     const annunci = annunciOrdinati().slice(0, 2);
 
     let html = '';
-    if (!state.alunni.length && !state.classe.nome) {
+    if (admin() && !state.alunni.length && !state.classe.nome) {
       html += `<div class="card"><h2>Benvenuto! 👋</h2>
         <p class="muted" style="margin-top:6px">Inizia impostando i dati della classe e l'elenco degli alunni.</p>
         <div class="btn-row"><button class="btn primary" data-act="vai" data-id="classe">Configura la classe</button></div></div>`;
@@ -374,7 +514,7 @@ const VISTE = {
     </div>
     <div class="card">
       <div class="section-head"><h2 style="text-transform:capitalize">${dataLunga(ui.giornoSel)}</h2>
-        <button class="btn primary small" data-act="nuovoEvento">+ Evento</button></div>
+        <button class="btn primary small adm" data-act="nuovoEvento">+ Evento</button></div>
       ${delGiorno.length ? `<ul class="list">${delGiorno.map(rigaEvento).join('')}</ul>` : '<p class="muted">Nessun evento in questo giorno.</p>'}
     </div>
     <div class="card"><div class="section-head"><h2>Prossimi eventi</h2></div>
@@ -384,18 +524,18 @@ const VISTE = {
 
   annunci() {
     let html = `<div class="section-head"><h2>Annunci</h2>
-      <button class="btn primary" data-act="nuovoAnnuncio">+ Nuovo</button></div>`;
+      <button class="btn primary adm" data-act="nuovoAnnuncio">+ Nuovo</button></div>`;
     const lista = annunciOrdinati();
     if (!lista.length) return html + '<div class="card empty">Nessun annuncio. Scrivi il primo comunicato per i genitori!</div>';
     html += lista.map((a) => `<div class="card annuncio ${a.fissato ? 'fissato' : ''}">
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:start">
         <div><h3>${a.fissato ? '📌 ' : ''}${esc(a.titolo)}</h3><p class="muted">${dataLunga(a.data)}</p></div>
-        <button class="icon-btn" title="Modifica" data-act="modificaAnnuncio" data-id="${a.id}">✏️</button>
+        <button class="icon-btn adm" title="Modifica" data-act="modificaAnnuncio" data-id="${a.id}">✏️</button>
       </div>
       <p class="testo">${esc(a.testo)}</p>
       <div class="btn-row">
         <button class="btn small" data-act="condividiAnnuncio" data-id="${a.id}">Condividi</button>
-        <button class="btn small ghost" data-act="fissaAnnuncio" data-id="${a.id}">${a.fissato ? 'Sblocca' : 'Fissa in alto'}</button>
+        <button class="btn small ghost adm" data-act="fissaAnnuncio" data-id="${a.id}">${a.fissato ? 'Sblocca' : 'Fissa in alto'}</button>
       </div></div>`).join('');
     return html;
   },
@@ -423,15 +563,76 @@ const VISTE = {
           <button class="icon-btn" title="Modifica" data-act="modificaAlunno" data-id="${a.id}">✏️</button>
         </li>`).join('')}</ul>` : '<p class="muted">Nessun alunno inserito.</p>'}
     </div>
+    ${server.modalita === 'server' ? `<div class="card">
+      <h2>Accesso online</h2>
+      <p class="muted" style="margin-top:6px">I genitori entrano con il codice di accesso e vedono annunci, calendario, spese e avanzamento delle raccolte, senza nomi né contatti degli alunni.</p>
+      <div class="btn-row">
+        <button class="btn" data-act="cambiaPassword" data-id="genitore">Cambia codice genitori</button>
+        <button class="btn" data-act="cambiaPassword" data-id="admin">Cambia la mia password</button>
+      </div>
+    </div>` : ''}
     <div class="card">
       <h2>Backup dei dati</h2>
-      <p class="muted" style="margin-top:6px">I dati sono salvati solo su questo dispositivo. Esporta un backup regolarmente o per trasferirli su un altro telefono/computer.</p>
+      <p class="muted" style="margin-top:6px">${server.modalita === 'server'
+    ? 'I dati sono salvati online. Esporta comunque un backup ogni tanto, per sicurezza.'
+    : 'I dati sono salvati solo su questo dispositivo. Esporta un backup regolarmente o per trasferirli su un altro telefono/computer.'}</p>
       <div class="btn-row">
         <button class="btn" data-act="esportaBackup">Esporta backup</button>
         <button class="btn" data-act="importaBackup">Importa backup</button>
         <button class="btn danger ghost" data-act="cancellaTutto">Cancella tutto</button>
       </div>
     </div>`;
+  },
+};
+
+/* ---------- Viste in sola lettura per i genitori ---------- */
+
+// Il server invia ai genitori solo dati riassuntivi (vedi vista_genitori in api.php).
+const VISTE_GENITORE = {
+  home() {
+    const oggi = oggiISO();
+    const prossimi = state.eventi.filter((e) => e.data >= oggi)
+      .sort((a, b) => (a.data + (a.ora || '')).localeCompare(b.data + (b.ora || ''))).slice(0, 3);
+    const aperte = state.raccolte.filter((r) => !r.chiusa);
+    const fissati = annunciOrdinati().slice(0, 3);
+    return `<div class="card"><div class="section-head"><h2>Annunci</h2>
+        <button class="btn small" data-act="vai" data-id="annunci">Tutti</button></div>
+      ${fissati.length ? fissati.map((a) => `<div style="margin-bottom:10px">
+          <strong>${a.fissato ? '📌 ' : ''}${esc(a.titolo)}</strong><p class="muted">${dataBreve(a.data)}</p></div>`).join('')
+        : '<p class="muted">Nessun annuncio.</p>'}</div>
+    <div class="card"><div class="section-head"><h2>Prossimi eventi</h2>
+        <button class="btn small" data-act="vai" data-id="calendario">Tutti</button></div>
+      ${prossimi.length ? `<ul class="list">${prossimi.map(rigaEvento).join('')}</ul>` : '<p class="muted">Nessun evento in programma.</p>'}</div>
+    ${aperte.length ? `<div class="card"><div class="section-head"><h2>Raccolte in corso</h2>
+        <button class="btn small" data-act="vai" data-id="raccolte">Dettagli</button></div>
+      ${aperte.map((r) => `<div style="margin-bottom:10px"><strong>${esc(r.titolo)}</strong>
+        <p class="muted">${euro(r.quota)} a testa${r.scadenza ? ' · entro ' + dataBreve(r.scadenza) : ''}</p></div>`).join('')}</div>` : ''}`;
+  },
+
+  cassa() {
+    const c = state.cassa;
+    const uscite = [...c.dettaglioUscite].sort((a, b) => b.data.localeCompare(a.data));
+    return `<div class="card stat"><div class="label">Saldo cassa</div>
+      <div class="value ${c.entrate - c.uscite < 0 ? 'neg' : ''}">${euro(c.entrate - c.uscite)}</div>
+      <p class="muted" style="margin-top:4px">Entrate <span class="pos">${euro(c.entrate)}</span> · Uscite <span class="neg">${euro(c.uscite)}</span></p></div>
+    <div class="card"><h2>Spese sostenute</h2>
+      ${uscite.length ? `<ul class="list">${uscite.map((m) => `<li><div class="grow">
+          <div class="title">${esc(m.descrizione)}</div><div class="muted">${dataBreve(m.data)} · ${esc(m.categoria)}</div></div>
+          <div class="amount neg">−${euro(m.importo)}</div></li>`).join('')}</ul>` : '<p class="muted">Nessuna spesa registrata.</p>'}</div>`;
+  },
+
+  raccolte() {
+    if (!state.raccolte.length) return '<div class="card empty">Nessuna raccolta fondi.</div>';
+    return [...state.raccolte].sort((a, b) => (a.chiusa - b.chiusa) || (b.creato - a.creato)).map((r) => {
+      const perc = r.totale ? Math.round((r.pagati / r.totale) * 100) : 0;
+      return `<div class="card">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:start">
+          <h3>${esc(r.titolo)}</h3>${r.chiusa ? '<span class="badge">chiusa</span>' : '<span class="badge amber">in corso</span>'}</div>
+        ${r.descrizione ? `<p style="white-space:pre-wrap;margin:8px 0">${esc(r.descrizione)}</p>` : ''}
+        <p class="muted">${euro(r.quota)} a testa${r.scadenza ? ' · entro ' + dataLunga(r.scadenza) : ''}</p>
+        <div class="progress"><div style="width:${perc}%"></div></div>
+        <p class="muted">${r.pagati}/${r.totale} quote versate · raccolti ${euro(r.raccolto)}</p></div>`;
+    }).join('');
   },
 };
 
@@ -445,7 +646,8 @@ function rigaEvento(e) {
       <div class="muted">${[e.ora, e.luogo].filter(Boolean).map(esc).join(' · ') || 'Tutto il giorno'}</div>
       ${e.note ? `<div class="muted">${esc(e.note)}</div>` : ''}</div>
     <button class="icon-btn" title="Condividi" data-act="condividiEvento" data-id="${e.id}">📤</button>
-    <button class="icon-btn" title="Modifica" data-act="modificaEvento" data-id="${e.id}">✏️</button>
+    <button class="icon-btn" title="Aggiungi al mio calendario" data-act="icsEvento" data-id="${e.id}">🗓️</button>
+    <button class="icon-btn adm" title="Modifica" data-act="modificaEvento" data-id="${e.id}">✏️</button>
   </li>`;
 }
 
@@ -608,6 +810,7 @@ const AZIONI = {
     if (e.note) testo += `\n\n${e.note}`;
     condividi(testo, e.titolo);
   },
+  icsEvento(id) { scaricaICS(state.eventi.find((x) => x.id === id)); },
 
   /* --- Annunci --- */
   nuovoAnnuncio() { formAnnuncio(); },
@@ -650,6 +853,23 @@ const AZIONI = {
         state.alunni.push(...nuovi);
         aggiungiAlleRaccolteAperte(nuovi.map((a) => a.id));
         toast(`${nuovi.length} alunni aggiunti`);
+      },
+    });
+  },
+
+  cambiaPassword(ruolo) {
+    const perAdmin = ruolo === 'admin';
+    const minimo = perAdmin ? 8 : 6;
+    apriModale({
+      titolo: perAdmin ? 'Cambia la tua password' : 'Cambia codice genitori',
+      corpo: `${perAdmin ? '' : '<p class="muted" style="margin-bottom:10px">Ricordati di comunicare il nuovo codice ai genitori.</p>'}
+        ${campo(`Nuova ${perAdmin ? 'password' : 'codice'} (almeno ${minimo} caratteri)`, 'nuova',
+    { type: perAdmin ? 'password' : 'text', required: true, attrs: `minlength="${minimo}" autocomplete="new-password"` })}`,
+      onSubmit(d) {
+        api('password', { ruolo, nuova: d.nuova })
+          .then(() => toast(perAdmin ? 'Password aggiornata' : 'Codice genitori aggiornato'))
+          .catch((e) => toast(e.message === 'password_uguale'
+            ? 'Password e codice genitori devono essere diversi' : 'Modifica non riuscita'));
       },
     });
   },
@@ -872,7 +1092,38 @@ function aggiungiAlleRaccolteAperte(ids) {
 
 /* ---------- Avvio ---------- */
 
-render();
+async function avvio() {
+  if (location.protocol.startsWith('http')) {
+    try {
+      await caricaDalServer();
+    } catch (e) {
+      if (e.status === 401) { mostraLogin(); return; }
+      if (e.dati?.errore === 'non_installato' || e.dati?.errore === 'config_mancante') {
+        document.getElementById('view').innerHTML = `<div class="card"><h2>App da installare</h2>
+          <p class="muted" style="margin-top:6px">Completa l'installazione aprendo <a href="install.php">install.php</a>.</p></div>`;
+        document.querySelector('.tabbar').hidden = true;
+        return;
+      }
+      if (!e.nessunaApi && e.status !== 404) {
+        document.getElementById('view').innerHTML = `<div class="card"><h2>Server non raggiungibile</h2>
+          <p class="muted" style="margin-top:6px">Controlla la connessione e ricarica la pagina.</p>
+          <div class="btn-row"><button class="btn primary" onclick="location.reload()">Riprova</button></div></div>`;
+        document.querySelector('.tabbar').hidden = true;
+        return;
+      }
+      // Nessun backend PHP (es. GitHub Pages): si usano i dati salvati sul dispositivo.
+      server.modalita = 'locale';
+      state = carica();
+    }
+  } else {
+    state = carica();
+  }
+  render();
+}
+
+document.getElementById('btn-esci').addEventListener('click', esci);
+
+avvio();
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});

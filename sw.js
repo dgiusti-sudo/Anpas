@@ -1,5 +1,5 @@
 // Service worker: rende l'app utilizzabile offline.
-const CACHE = 'classe-v1';
+const CACHE = 'classe-v2';
 const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', (e) => {
@@ -16,6 +16,8 @@ self.addEventListener('activate', (e) => {
 // Rete prima, cache come riserva: gli aggiornamenti arrivano subito quando si è online.
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
+  // I dati della classe e le pagine PHP non vanno mai messi in cache.
+  if (new URL(e.request.url).pathname.endsWith('.php')) return;
   e.respondWith(
     fetch(e.request)
       .then((res) => {

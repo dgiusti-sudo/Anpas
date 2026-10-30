@@ -1,0 +1,18 @@
+# Configurazione Apache (TopHost)
+Options -Indexes
+DirectoryIndex index.html
+
+# Impedisce l'accesso diretto ai file di configurazione e di servizio
+<FilesMatch "^(config\.php|config\.example\.php|db\.php|README\.md)$">
+  Require all denied
+</FilesMatch>
+RedirectMatch 404 /\.git
+
+# Forza HTTPS: togli il "#" dalle righe seguenti DOPO aver attivato il certificato SSL
+# sul dominio dal pannello TopHost (altrimenti il sito non sarà raggiungibile).
+#<IfModule mod_rewrite.c>
+#  RewriteEngine On
+#  RewriteCond %{HTTPS} !=on
+#  RewriteCond %{HTTP:X-Forwarded-Proto} !=https
+#  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+#</IfModule>
